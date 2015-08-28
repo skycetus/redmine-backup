@@ -1,0 +1,92 @@
+#! /bin/sh
+#
+# This script does backup copy of all contents, provided by new redmine server
+# There are:
+#   - redmine self by upgrade instruction
+#   - repositories,
+#     = bzr
+#     = svn
+#     = git
+#     = hg
+#   - configuration
+#     = apache2
+#     = etckeeper
+#
+# To run this script you need
+#   - have ssh
+#   - know how to be root@redmine
+#   - know how to use ssh-keygen also ssh-copy-id
+#
+
+. shell-error
+
+# Configuration
+configure()
+{
+	local configure
+
+	# From where take resources
+	remote=redmine
+
+	# where to storage backing stories
+	storage=./.storage
+
+	for configure in /etc/$PROG ~/etc/$PROG ~/.config/$PROG ~/.$PROG; do
+		[ -e $configure] && . $configure
+	done
+
+	[ -n $storage ] || fatal Wrong storage
+
+	return 0
+}
+
+prepare_storage()
+{
+	mkdir -p $storage/redmine/files || fatal Can not create redmine storage
+	mkdir -p $storage/bzr || fatal Can not create bzr storage
+	mkdir -p $storage/git || fatal Can not create git storage
+	mkdir -p $storage/hg || fatal Can not create hg storage
+	mkdir -p $storage/svn || fatal Can not create svn storage
+	mkdir -p $storage/apache2  || fatal Can not create apache storage
+
+	return 0
+}
+
+backup_bzr()
+{
+}
+backup_git()
+{
+}
+backup_hg()
+{
+}
+
+backup_svn()
+{
+	for repo in $( ssh root@$remote ls /srv/repos/svn ); do
+		test ! -d $storage/svn/$repo ||
+			svnadmin verify -q $storage ||
+				svnadmin create $storage/svn/$repo ||
+					fatal Creation of $storage/svn/$repo failed
+		ssh root@$remote svnadmin verify -q /srv/repos/svn/$repo ||
+			fatal Remote svn repository $repo is damaged
+		ssh root@remote svnadmin dump /srv/repos/svn/$repo |
+			svnadmin load $storage/svn/$repo ||
+				fatal Backup of svn repository $repo lost
+	done
+	return 0
+}
+
+configure ||
+	fatal Configuration failed
+prepre_storage ||
+	fatal Storage preparation failed
+backup_bzr ||
+	fatal Bazaar backup failed
+backup_git ||
+	fatal Git backup failed
+backup_hg ||
+	fatal Mercurial backup failed
+backup_svn ||
+	fatal Svn backup failed
