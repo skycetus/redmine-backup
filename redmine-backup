@@ -1,4 +1,4 @@
-#! /bin/sh
+#! /bin/sh -x
 #
 # This script does backup copy of all contents, provided by new redmine server
 # There are:
@@ -26,16 +26,20 @@ configure()
 	local configure
 
 	# From where take resources
-	remote=redmine
+	remote=root@redmine
 
 	# where to storage backing stories
 	storage=./.storage
 
 	for configure in /etc/$PROG ~/etc/$PROG ~/.config/$PROG ~/.$PROG; do
-		[ -e $configure] && . $configure
+		test -e $configure && . $configure
 	done
 
-	[ -n $storage ] || fatal Wrong storage
+	test -n $storage || fatal Wrong storage
+	test -n $remote && ssh $remote true || fatal Wrong remote
+
+	printf "Remote:\t%s\n" $remote
+	printf "Storage:\t%s\n" $storage
 
 	return 0
 }
@@ -49,38 +53,49 @@ prepare_storage()
 	mkdir -p $storage/svn || fatal Can not create svn storage
 	mkdir -p $storage/apache2  || fatal Can not create apache storage
 
-	return 0
+	printf "Storage prepared\n"
 }
 
 backup_bzr()
 {
+	printf "Bzr backup not realized yet\n"
 }
+
 backup_git()
 {
+	printf "Git backup not realized yet\n"
 }
+
 backup_hg()
 {
+	printf "Hg backup not realized yet\n"
 }
 
 backup_svn()
 {
-	for repo in $( ssh root@$remote ls /srv/repos/svn ); do
-		test ! -d $storage/svn/$repo ||
-			svnadmin verify -q $storage ||
-				svnadmin create $storage/svn/$repo ||
-					fatal Creation of $storage/svn/$repo failed
-		ssh root@$remote svnadmin verify -q /srv/repos/svn/$repo ||
+	for repo in $( ssh $remote ls /srv/repos/svn ); do
+		printf "Check backup svn repo %s\n", $repo
+		svnadmin verify -q $storage/svn/$repo ||
+			svnadmin create $storage/svn/$repo ||
+				fatal Creation of $storage/svn/$repo failed
+		printf "Check remote svn repo %s\n", $repo
+		ssh $remote svnadmin verify -q /srv/repos/svn/$repo ||
 			fatal Remote svn repository $repo is damaged
-		ssh root@remote svnadmin dump /srv/repos/svn/$repo |
-			svnadmin load $storage/svn/$repo ||
+		printf "Copying svn repo %s\n", $repo
+		rm -rf $storage/svn/.tmp && svnadmin create $storage/svn/.tmp ||
+			fatal Creation of tmp repo failed
+		ssh $remote svnadmin dump -q /srv/repos/svn/$repo |
+			svnadmin load -q $storage/svn/.tmp ||
 				fatal Backup of svn repository $repo lost
+		svnadmin hotcopy --incremental $storage/svn/.tmp $storage/svn/$repo ||
+			fatal Backup of svn repository $repo lost
 	done
-	return 0
+	printf "Svn backup done.\n"
 }
 
 configure ||
 	fatal Configuration failed
-prepre_storage ||
+prepare_storage ||
 	fatal Storage preparation failed
 backup_bzr ||
 	fatal Bazaar backup failed
