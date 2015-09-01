@@ -36,11 +36,9 @@ configure()
 	# From where take resources
 	remote=root@redmine
 	# where to storage backing stories
-	storage=./.storage
+	storage=/var/tmp/storage
 	# how to compress dumps: , .gz, .bz2, .xz
 	packed=.xz
-	# vcs backup account
-	operator=trunk@172.30.15.10
 	# verbosity
 	verbose=
 
@@ -48,13 +46,13 @@ configure()
 		test -e $configure && . $configure
 	done
 
-	test -n $storage || fatal wrong storage
-	test -n $remote && ssh $remote true || fatal wrong remote
+	test $storage && test ${storage:0:1} = / || fatal wrong storage
+	test $remote && ssh $remote true || fatal wrong remote
 
 	case $packed in
-		.bz2)	zput=bzip2;	zcat=bzcat;	zopt=-p;;
+		.bz2)	zput=bzip2;	zcat=bzcat;	zopt=${verbose:+"-p"};;
 		.gz)	zput=gzip;	zcat=zcat;	zopt=;;
-		.xz)	zput=xz;	zcat=xzcat;	zopt=-v;;
+		.xz)	zput=xz;	zcat=xzcat;	zopt=${verbose:+"-v"};;
 		*)	zput=true;	zcat=cat;	zopt=
 			test $packed && fatal unknown packed format $packed
 			;;
@@ -62,15 +60,14 @@ configure()
 
 	verbose remote: $remote
 	verbose storage: $storage
-	verbose packed $packed
-	verbose operator $operator
+	verbose packed: $packed
 
 	return 0
 }
 
 create_storage()
 {
-	mkdir -p $storage/$1 || fatal can not create storage/$1
+	mkdir -p $1 || fatal can not create $1
 }
 
 prepare_storage()
@@ -100,6 +97,15 @@ backup_hg()
 	message hg backup not realized yet
 }
 
+create_svn_repo()
+{
+	svnadmin create $1 &&
+		chgrp -R subversion $1 &&
+			chmod -R g+rwX $1 &&
+				find $1 -type d -exec chmod g+s {} \; ||
+					fatal creation of $1 failed
+}
+
 # Backing of remote svn repository
 # This procedure does not requires ssh access to backup server,
 # but presence of this can do it much faster...
@@ -109,12 +115,12 @@ backup_svn()
 		verbose start backup of remote svn repository $repo
 		ssh $remote svnadmin verify -q /srv/repos/svn/$repo ||
 			fatal remote svn repository $repo is damaged
-		# fast like snapshot
+		# target #1: slow slow dump...
+		verbose + dump remote svn repository to $storage/svn/$repo.dump$packed
 		ssh $remote rm   -rf /var/tmp/svn/$repo > /dev/null
 		ssh $remote mkdir -p /var/tmp/svn/$repo
 		ssh $remote svnadmin hotcopy /srv/repos/svn/$repo /var/tmp/svn/$repo ||
 			fatal hotcopying of remote svn repository $repo failed
-		verbose + dump remote svn repository to $storage/svn/$repo.dump$packed
 		test ! -f $storage/svn/$repo.dump$packed ||
 			mv -f $storage/svn/$repo.dump$packed $storage/svn/$repo.dump$packed.old ||
 				fatal rotation of $storage/svn/$repo.dump$packed failed
@@ -122,20 +128,33 @@ backup_svn()
 			$zput $zopt $storage/svn/$repo.dump ||
 				fatal dumping of svn repository $repo failed
 		ssh $remote rm   -rf /var/tmp/svn/$repo
+		# check dump restoring - target #1, part 2
 		verbose + restore svn repo $repo
 		rm -rf $storage/svn/$repo.tmp
-		svnadmin create $storage/svn/$repo.tmp ||
-			fatal creation of $storage/svn/$repo failed
+		create_svn_repo $storage/svn/$repo.tmp
 		$zcat $zopt $storage/svn/$repo.dump$packed | svnadmin load -q $storage/svn/$repo.tmp ||
 			fatal backup of svn repository $repo lost
 		verbose + rotate backup copies of svn repo $repo
-		if test -d $storage/svn/$repo && svnadmin verify -q $storage/svn/$repo > /dev/null; then
+		if test -d $storage/svn/$repo.std && svnadmin verify -q $storage/svn/$repo.std > /dev/null; then
 			test -d $storage/svn/$repo.old && rm -rf $storage/svn/$repo.old
-			mv $storage/svn/$repo $storage/svn/$repo.old
+			mv $storage/svn/$repo.std $storage/svn/$repo.old
 		fi
-		mv $storage/svn/$repo.tmp $storage/svn/$repo
-		svnadmin verify -q $storage/svn/$repo ||
-			fatal unknown error on $storage/svn/$repo
+		mv $storage/svn/$repo.tmp $storage/svn/$repo.std
+		svnadmin verify -q $storage/svn/$repo.std ||
+			fatal unknown error on $storage/svn/$repo.std
+		verbose + svnsync repo $repo
+		# target #2: fast backup by svnsync, need a back ssh from remote to backup server, as an operator
+		if ! test -d $storage/svn/$repo ||
+			! svnsync sync -q file://$operator/$storage/svn/$repo
+		then
+			rm -rf $storage/svn/$repo
+			create_svn_repo $storage/svn/$repo
+			printf '#! /bin/sh\nexit\n' > $storage/svn/$repo/hooks/pre-revprop-change &&
+				chmod a+rx $storage/svn/$repo/hooks/pre-revprop-change
+			svnsync init file://$storage/svn/$repo svn+ssh://$remote/srv/repos/svn/$repo &&
+				svnsync sync file://$storage/svn/$repo svn+ssh://$remote/srv/repos/svn/$repo ||
+					fatal svnsync failed
+		fi
 	done
 	message svn backup done
 }
