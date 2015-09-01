@@ -1,4 +1,4 @@
-#! /bin/sh -x
+#! /bin/sh
 #
 # This script does backup copy of all contents, provided by new redmine server
 # There are:
@@ -11,6 +11,14 @@
 #   - configuration
 #     = apache2
 #     = etckeeper
+#
+# Result is in:
+# $storage/
+#	redmine/* - dumps of web appclication
+#	bzr/* - copy of bzr repos
+#	git/* - copy of git repos
+#	hg/* - copy of hg repos
+#	svn/* - dumps of svn repos
 #
 # To run this script you need
 #   - have ssh
@@ -27,81 +35,120 @@ configure()
 
 	# From where take resources
 	remote=root@redmine
-
 	# where to storage backing stories
 	storage=./.storage
+	# how to compress dumps: , .gz, .bz2, .xz
+	packed=.xz
+	# vcs backup account
+	operator=trunk@172.30.15.10
+	# verbosity
+	verbose=
 
 	for configure in /etc/$PROG ~/etc/$PROG ~/.config/$PROG ~/.$PROG; do
 		test -e $configure && . $configure
 	done
 
-	test -n $storage || fatal Wrong storage
-	test -n $remote && ssh $remote true || fatal Wrong remote
+	test -n $storage || fatal wrong storage
+	test -n $remote && ssh $remote true || fatal wrong remote
 
-	printf "Remote:\t%s\n" $remote
-	printf "Storage:\t%s\n" $storage
+	case $packed in
+		.bz2)	zput=bzip2;	zcat=bzcat;	zopt=-p;;
+		.gz)	zput=gzip;	zcat=zcat;	zopt=;;
+		.xz)	zput=xz;	zcat=xzcat;	zopt=-v;;
+		*)	zput=true;	zcat=cat;	zopt=
+			test $packed && fatal unknown packed format $packed
+			;;
+	esac
+
+	verbose remote: $remote
+	verbose storage: $storage
+	verbose packed $packed
+	verbose operator $operator
 
 	return 0
 }
 
+create_storage()
+{
+	mkdir -p $storage/$1 || fatal can not create storage/$1
+}
+
 prepare_storage()
 {
-	mkdir -p $storage/redmine/files || fatal Can not create redmine storage
-	mkdir -p $storage/bzr || fatal Can not create bzr storage
-	mkdir -p $storage/git || fatal Can not create git storage
-	mkdir -p $storage/hg || fatal Can not create hg storage
-	mkdir -p $storage/svn || fatal Can not create svn storage
-	mkdir -p $storage/apache2  || fatal Can not create apache storage
+	create_storage $storage/apache2
+	create_storage $storage/bzr
+	create_storage $storage/git
+	create_storage $storage/hg
+	create_storage $storage/redmine/files
+	create_storage $storage/svn
 
-	printf "Storage prepared\n"
+	verbose storage prepared
 }
 
 backup_bzr()
 {
-	printf "Bzr backup not realized yet\n"
+	message bzr backup not realized yet
 }
 
 backup_git()
 {
-	printf "Git backup not realized yet\n"
+	message git backup not realized yet
 }
 
 backup_hg()
 {
-	printf "Hg backup not realized yet\n"
+	message hg backup not realized yet
 }
 
+# Backing of remote svn repository
+# This procedure does not requires ssh access to backup server,
+# but presence of this can do it much faster...
 backup_svn()
 {
 	for repo in $( ssh $remote ls /srv/repos/svn ); do
-		printf "Check backup svn repo %s\n", $repo
-		svnadmin verify -q $storage/svn/$repo ||
-			svnadmin create $storage/svn/$repo ||
-				fatal Creation of $storage/svn/$repo failed
-		printf "Check remote svn repo %s\n", $repo
+		verbose start backup of remote svn repository $repo
 		ssh $remote svnadmin verify -q /srv/repos/svn/$repo ||
-			fatal Remote svn repository $repo is damaged
-		printf "Copying svn repo %s\n", $repo
-		rm -rf $storage/svn/.tmp && svnadmin create $storage/svn/.tmp ||
-			fatal Creation of tmp repo failed
-		ssh $remote svnadmin dump -q /srv/repos/svn/$repo |
-			svnadmin load -q $storage/svn/.tmp ||
-				fatal Backup of svn repository $repo lost
-		svnadmin hotcopy --incremental $storage/svn/.tmp $storage/svn/$repo ||
-			fatal Backup of svn repository $repo lost
+			fatal remote svn repository $repo is damaged
+		# fast like snapshot
+		ssh $remote rm   -rf /var/tmp/svn/$repo > /dev/null
+		ssh $remote mkdir -p /var/tmp/svn/$repo
+		ssh $remote svnadmin hotcopy /srv/repos/svn/$repo /var/tmp/svn/$repo ||
+			fatal hotcopying of remote svn repository $repo failed
+		verbose + dump remote svn repository to $storage/svn/$repo.dump$packed
+		test ! -f $storage/svn/$repo.dump$packed ||
+			mv -f $storage/svn/$repo.dump$packed $storage/svn/$repo.dump$packed.old ||
+				fatal rotation of $storage/svn/$repo.dump$packed failed
+		ssh $remote svnadmin dump -q /var/tmp/svn/$repo > $storage/svn/$repo.dump &&
+			$zput $zopt $storage/svn/$repo.dump ||
+				fatal dumping of svn repository $repo failed
+		ssh $remote rm   -rf /var/tmp/svn/$repo
+		verbose + restore svn repo $repo
+		rm -rf $storage/svn/$repo.tmp
+		svnadmin create $storage/svn/$repo.tmp ||
+			fatal creation of $storage/svn/$repo failed
+		$zcat $zopt $storage/svn/$repo.dump$packed | svnadmin load -q $storage/svn/$repo.tmp ||
+			fatal backup of svn repository $repo lost
+		verbose + rotate backup copies of svn repo $repo
+		if test -d $storage/svn/$repo && svnadmin verify -q $storage/svn/$repo > /dev/null; then
+			test -d $storage/svn/$repo.old && rm -rf $storage/svn/$repo.old
+			mv $storage/svn/$repo $storage/svn/$repo.old
+		fi
+		mv $storage/svn/$repo.tmp $storage/svn/$repo
+		svnadmin verify -q $storage/svn/$repo ||
+			fatal unknown error on $storage/svn/$repo
 	done
-	printf "Svn backup done.\n"
+	message svn backup done
 }
 
 configure ||
-	fatal Configuration failed
+	fatal configuration failed
 prepare_storage ||
-	fatal Storage preparation failed
+	fatal storage preparation failed
 backup_bzr ||
-	fatal Bazaar backup failed
+	fatal bazaar backup failed
 backup_git ||
-	fatal Git backup failed
+	fatal git backup failed
 backup_hg ||
-	fatal Mercurial backup failed
+	fatal mercurial backup failed
 backup_svn ||
-	fatal Svn backup failed
+	fatal svn backup failed
