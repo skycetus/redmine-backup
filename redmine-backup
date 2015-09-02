@@ -77,6 +77,16 @@ create_storage()
 	mkdir -p $1 || fatal can not create $1
 }
 
+# files that can be not saved under /etckeeper
+backup_apache2()
+{
+	local here=$storage
+	local there=/etc/apache2
+	create_storage $here
+	verbose start backup of remote apache2 config
+	rsync -aHS --delete-after ${progress:+"-vP"} $remote:/$there $here
+}
+
 backup_bzr()
 {
 	local here=$storage/bzr
@@ -108,6 +118,21 @@ backup_bzr()
 	done
 }
 
+# remote etckeeper repository
+backup_etc()
+{
+	local repo=etc
+	local here=$storage
+	local there=
+	create_storage $here
+	verbose start backup of remote etckeeper
+	test -d $here/$repo ||
+		git clone --mirror $remote:$there/$repo $here/$repo ||
+			fatal git clone failed on etckeeper
+	git --git-dir $here/$repo remote update ||
+		fatal git update failed on etckeeper
+}
+
 backup_git()
 {
 	local here=$storage/git
@@ -123,21 +148,6 @@ backup_git()
 		git --git-dir $here/$repo remote update ||
 			fatal git update failed on $repo
 	done
-}
-
-# remote etckeeper repository
-backup_etc()
-{
-	local repo=etc
-	local here=$storage
-	local there=
-	create_storage $here
-	verbose start backup of remote etckeeper
-	test -d $here/$repo ||
-		git clone --mirror $remote:$there/$repo $here/$repo ||
-			fatal git clone failed on etckeeper
-	git --git-dir $here/$repo remote update ||
-		fatal git update failed on etckeeper
 }
 
 backup_hg()
@@ -242,16 +252,6 @@ backup_redmine()
 	ssh $remote mysqldump -u root --opt redmine_production > $here/redmine.sql &&
 		$zput $zopt $here/redmine.sql ||
 			fatal dumping of redmine database failed
-}
-
-# files that can be not saved under /etckeeper
-backup_apache2()
-{
-	local here=$storage
-	local there=/etc/apache2
-	create_storage $here
-	verbose start backup of remote apache2 config
-	rsync -aHS --delete-after ${progress:+"-vP"} $remote:/$there $here
 }
 
 backup()
