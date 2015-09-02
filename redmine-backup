@@ -121,22 +121,28 @@ backup_git()
 		# special case: symlink to public cache
 		test "$repo" = public && continue
 		verbose start backup of remote git repository $repo
-		ssh $remote git --git-dir $there/$repo branch -a ||
-			fatal branches not found
+		test -d $here/$repo ||
+			git clone --mirror $remote:$there/$repo $here/$repo ||
+				fatal git clone failed on $repo 
+		git --git-dir $here/$repo remote update ||
+			fatal git update failed on $repo 
 	done
-	message git backup not realized yet
+	message git backup done
 }
 
 backup_hg()
 {
-	local here=$storage/git
-	local there=/srv/repos/git
+	local here=$storage/hg
+	local there=/srv/repos/hg
 	for repo in $( ssh $remote ls $there ); do
 		verbose start backup of remote hg repository $repo
-		ssh $remote hg -R $there/$repo branches ||
-			fatal branches not found
+		test -d $here/$repo ||
+			hg -q clone --noupdate ssh://$remote/$there/$repo $here/$repo ||
+				fatal hg clone failed on $repo
+		hg -R $here/$repo -q pull ssh://$remote/$there/$repo ||
+			fatal hg pull failed on $repo
 	done
-	message hg backup not realized yet
+	message hg backup done
 }
 
 create_svn_repo()
@@ -207,11 +213,11 @@ configure ||
 	fatal configuration failed
 prepare_storage ||
 	fatal storage preparation failed
-backup_bzr ||
-	fatal bazaar backup failed
+#backup_bzr ||
+#	fatal bazaar backup failed
 #backup_git ||
 #	fatal git backup failed
-#backup_hg ||
-#	fatal mercurial backup failed
+backup_hg ||
+	fatal mercurial backup failed
 #backup_svn ||
 #	fatal svn backup failed
