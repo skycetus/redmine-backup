@@ -27,6 +27,7 @@
 #
 
 . shell-error
+. shell-var
 
 # Configuration
 configure()
@@ -41,18 +42,26 @@ configure()
 	packed=.xz
 	# verbosity
 	verbose=
+	# external progress indication
+	progress=
+	# external quiet
+	quiet=yes
 
 	for configure in /etc/$PROG ~/etc/$PROG ~/.config/$PROG ~/.$PROG; do
 		test -e $configure && . $configure
 	done
 
+	shell_var_is_yes "$quiet" && quiet=yes || quiet=
+	shell_var_is_yes "$verbose" && verbose=yes || verbose=
+	shell_var_is_yes "$progress" && progress=yes || progress=
+
 	test $storage && test ${storage:0:1} = / || fatal wrong storage
 	test $remote && ssh $remote true || fatal wrong remote
 
 	case $packed in
-		.bz2)	zput=bzip2;	zcat=bzcat;	zopt=${verbose:+"-p"};;
+		.bz2)	zput=bzip2;	zcat=bzcat;	zopt=${progress:+"-p"};;
 		.gz)	zput=gzip;	zcat=zcat;	zopt=;;
-		.xz)	zput=xz;	zcat=xzcat;	zopt=${verbose:+"-v"};;
+		.xz)	zput=xz;	zcat=xzcat;	zopt=${progress:+"-v"};;
 		*)	zput=true;	zcat=cat;	zopt=
 			test $packed && fatal unknown packed format $packed
 			;;
@@ -76,7 +85,7 @@ backup_bzr()
 	for repo in $( ssh $remote ls $there ); do
 		verbose start backup of remote bzr repository $repo
 		test -d $here/$repo ||
-			bzr init-repo --no-trees -q $here/$repo ||
+			bzr init-repo --no-trees ${quiet:+-q} $here/$repo ||
 				fatal bzr init-repo failed
 		here_branches=$( bzr branches -R $here/$repo )
 		for branch in $( ssh $remote bzr branches -R $there/$repo ); do
@@ -84,7 +93,7 @@ backup_bzr()
 #			for exist in $( bzr branches -R $here/$repo ); do
 			for exist in $here_branches; do
 				if [ "$exist" = "$branch" ]; then
-					bzr pull -d $here/$repo/$branch --remember -q bzr+ssh://$remote/$there/$repo/$branch ||
+					bzr pull -d $here/$repo/$branch --remember ${quiet:+-q} bzr+ssh://$remote/$there/$repo/$branch ||
 						fatal bzr pull of $here/$repo/$branch failed
 					branch=..
 					break
@@ -92,12 +101,11 @@ backup_bzr()
 			done
 			test "$branch" = ".." && continue
 			mkdir -p $here/$repo/$branch &&
-				bzr init --no-tree -q $here/$repo/$branch &&
-					bzr pull -d $here/$repo/$branch --remember -q bzr+ssh://$remote/$there/$repo/$branch ||
+				bzr init --no-tree ${quiet:+-q} $here/$repo/$branch &&
+					bzr pull -d $here/$repo/$branch --remember ${quiet:+-q} bzr+ssh://$remote/$there/$repo/$branch ||
 						fatal bzr pull of $here/$repo/$branch failed
 		done
 	done
-	message bzr backup done
 }
 
 backup_git()
@@ -115,7 +123,6 @@ backup_git()
 		git --git-dir $here/$repo remote update ||
 			fatal git update failed on $repo
 	done
-	message git backup done
 }
 
 # remote etckeeper repository
@@ -141,12 +148,11 @@ backup_hg()
 	for repo in $( ssh $remote ls $there ); do
 		verbose start backup of remote hg repository $repo
 		test -d $here/$repo ||
-			hg -q clone --noupdate ssh://$remote/$there/$repo $here/$repo ||
+			hg ${quiet:+-q} clone --noupdate ssh://$remote/$there/$repo $here/$repo ||
 				fatal hg clone failed on $repo
-		hg -R $here/$repo -q pull ssh://$remote/$there/$repo ||
+		hg -R $here/$repo ${quiet:+-q} pull ssh://$remote/$there/$repo ||
 			fatal hg pull failed on $repo
 	done
-	message hg backup done
 }
 
 create_svn_repo()
@@ -166,7 +172,7 @@ backup_svn()
 	create_storage $here
 	for repo in $( ssh $remote ls $there ); do
 		verbose start backup of remote svn repository $repo
-		ssh $remote svnadmin verify -q $there/$repo ||
+		ssh $remote svnadmin verify ${quiet:+-q} $there/$repo ||
 			fatal remote svn repository $repo is damaged
 		# target #1: slow slow dump...
 		verbose + dump remote svn repository to $here/$repo.dump$packed
@@ -177,7 +183,7 @@ backup_svn()
 		test ! -f $here/$repo.dump$packed ||
 			mv -f $here/$repo.dump$packed $here/$repo.dump$packed.old ||
 				fatal rotation of $here/$repo.dump$packed failed
-		ssh $remote svnadmin dump -q /var/tmp/svn/$repo > $here/$repo.dump &&
+		ssh $remote svnadmin dump ${quiet:+-q} /var/tmp/svn/$repo > $here/$repo.dump &&
 			$zput $zopt $here/$repo.dump ||
 				fatal dumping of svn repository $repo failed
 		ssh $remote rm   -rf /var/tmp/svn/$repo
@@ -185,31 +191,30 @@ backup_svn()
 		verbose + restore svn repo $repo
 		rm -rf $here/$repo.tmp
 		create_svn_repo $here/$repo.tmp
-		$zcat $zopt $here/$repo.dump$packed | svnadmin load -q $here/$repo.tmp ||
+		$zcat $zopt $here/$repo.dump$packed | svnadmin load ${quiet:+-q} $here/$repo.tmp ||
 			fatal backup of svn repository $repo lost
 		verbose + rotate backup copies of svn repo $repo
-		if test -d $here/$repo.std && svnadmin verify -q $here/$repo.std > /dev/null; then
+		if test -d $here/$repo.std && svnadmin verify ${quiet:+-q} $here/$repo.std > /dev/null; then
 			test -d $here/$repo.old && rm -rf $here/$repo.old
 			mv $here/$repo.std $here/$repo.old
 		fi
 		mv $here/$repo.tmp $here/$repo.std
-		svnadmin verify -q $here/$repo.std ||
+		svnadmin verify ${quiet:+-q} $here/$repo.std ||
 			fatal unknown error on $here/$repo.std
 		verbose + svnsync repo $repo
 		# target #2: fast backup by svnsync, need a back ssh from remote to backup server, as an operator
 		if ! test -d $here/$repo ||
-			! svnsync sync -q file://$operator/$here/$repo
+			! svnsync sync ${quiet:+-q} file://$operator/$here/$repo
 		then
 			rm -rf $here/$repo
 			create_svn_repo $here/$repo
 			printf '#! /bin/sh\nexit\n' > $here/$repo/hooks/pre-revprop-change &&
 				chmod a+rx $here/$repo/hooks/pre-revprop-change
 			svnsync init file://$here/$repo svn+ssh://$remote/$there/$repo &&
-				svnsync sync -q file://$here/$repo svn+ssh://$remote/$there/$repo ||
+				svnsync sync ${quiet:+-q} file://$here/$repo svn+ssh://$remote/$there/$repo ||
 					fatal svnsync failed
 		fi
 	done
-	message svn backup done
 }
 
 # redmine database + files + ???
@@ -222,7 +227,7 @@ backup_redmine()
 	# Backing up the files
 	for folder in files config plugins; do
 		#create_storage $here/$folder
-		rsync -a --delete-after ${verbose:+"-vP"} $remote:/$there/$folder $here/
+		rsync -a --delete-after ${progress:+"-vP"} $remote:/$there/$folder $here/
 	done
 	# MySQL database
 	test ! -f $here/redmine.sql$packed ||
@@ -246,12 +251,14 @@ backup_apache2()
 	local there=/etc/apache2
 	create_storage $here
 	verbose start backup of remote apache2 config
-	rsync -aHS --delete-after ${verbose:+"-vP"} $remote:/$there $here
+	rsync -aHS --delete-after ${progress:+"-vP"} $remote:/$there $here
 }
 
 backup()
 {
-	eval backup_$1 || fatal backup failed on $1
+	eval backup_$1 &&
+		message backup success for $1 ||
+			fatal backup failed on $1
 }
 
 configure
