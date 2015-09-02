@@ -84,16 +84,58 @@ prepare_storage()
 
 backup_bzr()
 {
-	message bzr backup not realized yet
+	local here=$storage/bzr
+	local there=/srv/repos/bzr
+	for repo in $( ssh $remote ls $there ); do
+		verbose start backup of remote bzr repository $repo
+		test -d $here/$repo ||
+			bzr init-repo --no-trees -q $here/$repo ||
+				fatal bzr init-repo failed
+		here_branches=$( bzr branches -R $here/$repo )
+		for branch in $( ssh $remote bzr branches -R $there/$repo ); do
+			verbose + branch $repo/$branch
+#			for exist in $( bzr branches -R $here/$repo ); do
+			for exist in $here_branches; do
+				if [ "$exist" = "$branch" ]; then
+					bzr pull -d $here/$repo/$branch --remember -q bzr+ssh://$remote/$there/$repo/$branch ||
+						fatal bzr pull of $here/$repo/$branch failed
+					branch=..
+					break
+				fi
+			done
+			test "$branch" = ".." && continue
+			mkdir -p $here/$repo/$branch &&
+				bzr init --no-tree -q $here/$repo/$branch &&
+					bzr pull -d $here/$repo/$branch --remember -q bzr+ssh://$remote/$there/$repo/$branch ||
+						fatal bzr pull of $here/$repo/$branch failed
+		done
+	done
+	message bzr backup done
 }
 
 backup_git()
 {
+	local here=$storage/git
+	local there=/srv/repos/git
+	for repo in $( ssh $remote ls $there ); do
+		# special case: symlink to public cache
+		test "$repo" = public && continue
+		verbose start backup of remote git repository $repo
+		ssh $remote git --git-dir $there/$repo branch -a ||
+			fatal branches not found
+	done
 	message git backup not realized yet
 }
 
 backup_hg()
 {
+	local here=$storage/git
+	local there=/srv/repos/git
+	for repo in $( ssh $remote ls $there ); do
+		verbose start backup of remote hg repository $repo
+		ssh $remote hg -R $there/$repo branches ||
+			fatal branches not found
+	done
 	message hg backup not realized yet
 }
 
@@ -111,48 +153,50 @@ create_svn_repo()
 # but presence of this can do it much faster...
 backup_svn()
 {
-	for repo in $( ssh $remote ls /srv/repos/svn ); do
+	local here=$storage/svn
+	local there=/srv/repos/svn
+	for repo in $( ssh $remote ls $there ); do
 		verbose start backup of remote svn repository $repo
-		ssh $remote svnadmin verify -q /srv/repos/svn/$repo ||
+		ssh $remote svnadmin verify -q $there/$repo ||
 			fatal remote svn repository $repo is damaged
 		# target #1: slow slow dump...
-		verbose + dump remote svn repository to $storage/svn/$repo.dump$packed
+		verbose + dump remote svn repository to $here/$repo.dump$packed
 		ssh $remote rm   -rf /var/tmp/svn/$repo > /dev/null
 		ssh $remote mkdir -p /var/tmp/svn/$repo
-		ssh $remote svnadmin hotcopy /srv/repos/svn/$repo /var/tmp/svn/$repo ||
+		ssh $remote svnadmin hotcopy $there/$repo /var/tmp/svn/$repo ||
 			fatal hotcopying of remote svn repository $repo failed
-		test ! -f $storage/svn/$repo.dump$packed ||
-			mv -f $storage/svn/$repo.dump$packed $storage/svn/$repo.dump$packed.old ||
-				fatal rotation of $storage/svn/$repo.dump$packed failed
-		ssh $remote svnadmin dump -q /var/tmp/svn/$repo > $storage/svn/$repo.dump &&
-			$zput $zopt $storage/svn/$repo.dump ||
+		test ! -f $here/$repo.dump$packed ||
+			mv -f $here/$repo.dump$packed $here/$repo.dump$packed.old ||
+				fatal rotation of $here/$repo.dump$packed failed
+		ssh $remote svnadmin dump -q /var/tmp/svn/$repo > $here/$repo.dump &&
+			$zput $zopt $here/$repo.dump ||
 				fatal dumping of svn repository $repo failed
 		ssh $remote rm   -rf /var/tmp/svn/$repo
 		# check dump restoring - target #1, part 2
 		verbose + restore svn repo $repo
-		rm -rf $storage/svn/$repo.tmp
-		create_svn_repo $storage/svn/$repo.tmp
-		$zcat $zopt $storage/svn/$repo.dump$packed | svnadmin load -q $storage/svn/$repo.tmp ||
+		rm -rf $here/$repo.tmp
+		create_svn_repo $here/$repo.tmp
+		$zcat $zopt $here/$repo.dump$packed | svnadmin load -q $here/$repo.tmp ||
 			fatal backup of svn repository $repo lost
 		verbose + rotate backup copies of svn repo $repo
-		if test -d $storage/svn/$repo.std && svnadmin verify -q $storage/svn/$repo.std > /dev/null; then
-			test -d $storage/svn/$repo.old && rm -rf $storage/svn/$repo.old
-			mv $storage/svn/$repo.std $storage/svn/$repo.old
+		if test -d $here/$repo.std && svnadmin verify -q $here/$repo.std > /dev/null; then
+			test -d $here/$repo.old && rm -rf $here/$repo.old
+			mv $here/$repo.std $here/$repo.old
 		fi
-		mv $storage/svn/$repo.tmp $storage/svn/$repo.std
-		svnadmin verify -q $storage/svn/$repo.std ||
-			fatal unknown error on $storage/svn/$repo.std
+		mv $here/$repo.tmp $here/$repo.std
+		svnadmin verify -q $here/$repo.std ||
+			fatal unknown error on $here/$repo.std
 		verbose + svnsync repo $repo
 		# target #2: fast backup by svnsync, need a back ssh from remote to backup server, as an operator
-		if ! test -d $storage/svn/$repo ||
-			! svnsync sync -q file://$operator/$storage/svn/$repo
+		if ! test -d $here/$repo ||
+			! svnsync sync -q file://$operator/$here/$repo
 		then
-			rm -rf $storage/svn/$repo
-			create_svn_repo $storage/svn/$repo
-			printf '#! /bin/sh\nexit\n' > $storage/svn/$repo/hooks/pre-revprop-change &&
-				chmod a+rx $storage/svn/$repo/hooks/pre-revprop-change
-			svnsync init file://$storage/svn/$repo svn+ssh://$remote/srv/repos/svn/$repo &&
-				svnsync sync file://$storage/svn/$repo svn+ssh://$remote/srv/repos/svn/$repo ||
+			rm -rf $here/$repo
+			create_svn_repo $here/$repo
+			printf '#! /bin/sh\nexit\n' > $here/$repo/hooks/pre-revprop-change &&
+				chmod a+rx $here/$repo/hooks/pre-revprop-change
+			svnsync init file://$here/$repo svn+ssh://$remote/$there/$repo &&
+				svnsync sync file://$here/$repo svn+ssh://$remote/$there/$repo ||
 					fatal svnsync failed
 		fi
 	done
@@ -165,9 +209,9 @@ prepare_storage ||
 	fatal storage preparation failed
 backup_bzr ||
 	fatal bazaar backup failed
-backup_git ||
-	fatal git backup failed
-backup_hg ||
-	fatal mercurial backup failed
-backup_svn ||
-	fatal svn backup failed
+#backup_git ||
+#	fatal git backup failed
+#backup_hg ||
+#	fatal mercurial backup failed
+#backup_svn ||
+#	fatal svn backup failed
