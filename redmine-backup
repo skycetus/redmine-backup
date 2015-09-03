@@ -1,7 +1,14 @@
 #! /bin/sh
 #
-# This script does backup copy of all contents provided by turnkey redmine server
-# http://www.turnkeylinux.org/redmine
+# HowTo keywords:
+#   - redmine backup
+#   - svn backup
+#   - git backup
+#   - bzr backup
+#   - hg backup
+#
+# This script does backup copy of sensitive content provided by Turnkey Redmine Appliance
+#   - http://www.turnkeylinux.org/redmine
 #
 # There are:
 #   - redmine self with upgrade instruction in help
@@ -18,33 +25,56 @@
 #     = apache2
 #     = etckeeper
 #
-# Backup copy stored in:
+# Backup copy stored as tree:
 #   $storage/
-#       redmine/    - sensitive data of the web appclication
+#       apache2/    - backup copy of /etc/apache2
 #       bzr/        - backup copy of bzr repos
+#       etc/        - backup copy of /etc (via etckeeper)
 #       git/        - backup copy of git repos
 #       hg/         - backup copy of hg repos
+#       redmine/    - sensitive data of the web appclication
 #       svn/        - backup copy, dumps, and restored from dumps copyes of svn repos
-#       apache2/    - bzckup copy of /etc/apache2
+#
+# Main config option are:
+#   remote          - redmine admin (probably root) in form of ssh user@hostname
+#   storage         - local directory where to store backup
+#   packed          - compressed format of text dumps, .gz, .xz, .bz2 or nothing
+#   verbose         - =yes to display stages of running script
+#   progress        - =yes to display percentage of copying/packing/unpacking
+#   quiet           - =yes to supress output of version control utilities
+#   message_syslog  - =yes to send messages of running scrip into syslog
+#
+# Partial config opions are:
+#   disable_apache2 - =yes to disable backup apache2
+#   disable_bzr     - =yes to disable backup bzr
+#   disable_etc     - =yes to disable backup etc
+#   disable_git     - =yes to disable backup git
+#   disable_hg      - =yes to disable backup hg
+#   disable_redmine - =yes to disable backup redmine
+#   disable_svn     - =yes to disable backup svn
 #
 # To run this script you need
 #   - have ssh
 #   - know how to be root@redmine
-#   - know how to use ssh-keygen also ssh-copy-id
-#
-# Main config option are:
-#   remote          - redmine admin (probably root) in form of user@host
-#   storage         - local directory where to store backup
-#   packed          - ={,.gz,.bz2,.xz} format of packed dump
-#   verbose         - =yes to display stages of script running
-#   progress        - =yes to display percentage of copying/packing/unpacking
-#   quiet           - =no  to display output of version contol utilities
-#   messaage_syslog - =yes to display stages of scrip running and error messages in syslog
+#   - know how to use ssh-keygen and ssh-copy-id
+#   - create ~/.my.cnf for remote
 
 . shell-error
 . shell-var
 
-# Configuration
+# approve means: test vs defined and not negative
+approve()
+{
+	test $1 && ! shell_var_is_no "$1"
+}
+
+# denounce means test vs undefined or negative
+denounce()
+{
+	test ! $1 || shell_var_is_no "$1"
+}
+
+# configuration
 configure()
 {
 	local configure
@@ -66,9 +96,10 @@ configure()
 		test -e $configure && . $configure
 	done
 
-	shell_var_is_yes "$quiet" && quiet=yes || quiet=
-	shell_var_is_yes "$verbose" && verbose=yes || verbose=
-	shell_var_is_yes "$progress" && progress=yes || progress=
+	approve "$quiet" && quiet=yes || quiet=
+	approve "$verbose" && verbose=yes || verbose=
+	approve "$progress" && progress=yes || progress=
+	approve "$message_syslog" && message_syslog=yes || message_syslog=
 
 	test $storage && test ${storage:0:1} = / || fatal wrong storage
 	test $remote && ssh $remote true || fatal wrong remote
@@ -112,10 +143,9 @@ backup_bzr()
 		test -d $here/$repo ||
 			bzr init-repo --no-trees ${quiet:+-q} $here/$repo ||
 				fatal bzr init-repo failed
-		here_branches=$( bzr branches -R $here/$repo )
+		local here_branches=$( bzr branches -R $here/$repo )
 		for branch in $( ssh $remote bzr branches -R $there/$repo ); do
 			verbose + branch $repo/$branch
-#			for exist in $( bzr branches -R $here/$repo ); do
 			for exist in $here_branches; do
 				if [ "$exist" = "$branch" ]; then
 					bzr pull -d $here/$repo/$branch --remember ${quiet:+-q} bzr+ssh://$remote/$there/$repo/$branch ||
@@ -199,7 +229,26 @@ backup_svn()
 		verbose start backup of remote svn repository $repo
 		ssh $remote svnadmin verify ${quiet:+-q} $there/$repo ||
 			fatal remote svn repository $repo is damaged
-		# target #1: slow slow dump...
+		# target #1: fast backup by svnsync
+		if ! test -d $here/$repo ||
+			! svnsync sync file://$here/$repo > $here/$repo.sync
+		then
+			verbose + svnsync init
+			rm -rf $here/$repo
+			create_svn_repo $here/$repo
+			printf '#! /bin/sh\nexit\n' > $here/$repo/hooks/pre-revprop-change &&
+				chmod a+rx $here/$repo/hooks/pre-revprop-change
+			svnsync init file://$here/$repo svn+ssh://$remote/$there/$repo &&
+				svnsync sync file://$here/$repo svn+ssh://$remote/$there/$repo > $here/$repo.sync ||
+					fatal svnsync failed
+		fi
+		test -s $here/$repo.sync || continue
+		# If this does not work, then, with LC_MESSAGES=C
+		#grep '^Transmitting file data' $here/$repo.sync ||
+		#	grep '^Committed revision' $here/$repo.sync ||
+		#		grep '^Copied properties for revision' $here/$repo.sync ||
+		#			continue
+		# target #2: slow slow dump...
 		verbose + dump remote svn repository to $here/$repo.dump$packed
 		ssh $remote rm   -rf /var/tmp/svn/$repo > /dev/null
 		ssh $remote mkdir -p /var/tmp/svn/$repo
@@ -212,7 +261,7 @@ backup_svn()
 			$zput $zopt $here/$repo.dump ||
 				fatal dumping of svn repository $repo failed
 		ssh $remote rm   -rf /var/tmp/svn/$repo
-		# check dump restoring - target #1, part 2
+		# target #3: check dump restoring
 		verbose + restore svn repo $repo
 		rm -rf $here/$repo.tmp
 		create_svn_repo $here/$repo.tmp
@@ -227,18 +276,6 @@ backup_svn()
 		svnadmin verify ${quiet:+-q} $here/$repo.std ||
 			fatal unknown error on $here/$repo.std
 		verbose + svnsync repo $repo
-		# target #2: fast backup by svnsync, need a back ssh from remote to backup server, as an operator
-		if ! test -d $here/$repo ||
-			! svnsync sync ${quiet:+-q} file://$operator/$here/$repo
-		then
-			rm -rf $here/$repo
-			create_svn_repo $here/$repo
-			printf '#! /bin/sh\nexit\n' > $here/$repo/hooks/pre-revprop-change &&
-				chmod a+rx $here/$repo/hooks/pre-revprop-change
-			svnsync init file://$here/$repo svn+ssh://$remote/$there/$repo &&
-				svnsync sync ${quiet:+-q} file://$here/$repo svn+ssh://$remote/$there/$repo ||
-					fatal svnsync failed
-		fi
 	done
 }
 
@@ -249,19 +286,29 @@ backup_redmine()
 	local here=$storage/redmine
 	local there=/var/www/redmine
 	create_storage $here
+	verbose start backup of remote redmine application
 	# Backing up the files
 	for folder in files config plugins; do
-		#create_storage $here/$folder
+		verbose + backup $folder/
 		rsync -a --delete-after ${progress:+"-vP"} $remote:/$there/$folder $here/
 	done
 	# MySQL database
+	verbose + backup mysql database
 	test ! -f $here/redmine.sql$packed ||
 		mv -f $here/redmine.sql$packed $here/redmine.sql$packed.old ||
 			fatal rotation of $here/redmine.sql$packed failed
-	# For this to work create /root/.my.cnf:
+
+	# You can type your password into mysqldump command line, like -pyour_my_password...
+	# Well, this is insecure. Your password in ps output, in history, everywhere.
+	# You can type -p in command line, then type your_my_password in console when prompted...
+	# Well, this is uncomfortable, annoying, unaccectable at end.
+	# So, place into file in home directory of mysql administrator (root, yes?), /root/.my.cnf,
+	# these 2 lines:
+
 	#[client]
-	#password=put-here-if-you-know-a-right-password?
-	# Another, insecure, metod is to place -pyourpassword into mysqldump command line
+	#password=your_my_password
+
+	# Well... your user, hidden under $remote, must have access to this file, or must be root.
 	ssh $remote grep ^password= /root/.my.cnf > /dev/null ||
 		fatal MySQL password must be configured and accessible in /root/.my.cnf
 	ssh $remote mysqldump -u root --opt redmine_production > $here/redmine.sql &&
@@ -271,16 +318,21 @@ backup_redmine()
 
 backup()
 {
-	eval backup_$1 &&
-		message backup success for $1 ||
+	eval $( printf "local disabled=\${disable_$1}" )
+	local made=disabled
+	if denounce "$disabled"; then
+		eval backup_$1 ||
 			fatal backup failed on $1
+		made=success
+	fi
+	message backup $made for $1
 }
 
 configure
-backup apache2
 backup bzr
-backup etc
+backup svn
 backup git
 backup hg
-backup svn
+backup etc
+backup apache2
 backup redmine
