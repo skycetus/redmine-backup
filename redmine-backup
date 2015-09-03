@@ -1,30 +1,45 @@
 #! /bin/sh
 #
-# This script does backup copy of all contents, provided by new redmine server
+# This script does backup copy of all contents provided by turnkey redmine server
+# http://www.turnkeylinux.org/redmine
+#
 # There are:
-#   - repositories,
+#   - redmine self with upgrade instruction in help
+#     = mysql db redmine-production
+#     = /var/www/redmine/files/
+#     = /var/www/redmine/config/
+#     = /var/www/redmine/plugins/
+#   - repositories
 #     = bzr
 #     = svn
 #     = git
 #     = hg
-#   - redmine self by upgrade instruction
-#   - configuration
+#   - host configuration
 #     = apache2
 #     = etckeeper
 #
-# Result is in:
-# $storage/
-#	redmine/* - dumps of web appclication
-#	bzr/* - copy of bzr repos
-#	git/* - copy of git repos
-#	hg/* - copy of hg repos
-#	svn/* - dumps of svn repos
+# Backup copy stored in:
+#   $storage/
+#       redmine/    - sensitive data of the web appclication
+#       bzr/        - backup copy of bzr repos
+#       git/        - backup copy of git repos
+#       hg/         - backup copy of hg repos
+#       svn/        - backup copy, dumps, and restored from dumps copyes of svn repos
+#       apache2/    - bzckup copy of /etc/apache2
 #
 # To run this script you need
 #   - have ssh
 #   - know how to be root@redmine
 #   - know how to use ssh-keygen also ssh-copy-id
 #
+# Main config option are:
+#   remote          - redmine admin (probably root) in form of user@host
+#   storage         - local directory where to store backup
+#   packed          - ={,.gz,.bz2,.xz} format of packed dump
+#   verbose         - =yes to display stages of script running
+#   progress        - =yes to display percentage of copying/packing/unpacking
+#   quiet           - =no  to display output of version contol utilities
+#   messaage_syslog - =yes to display stages of scrip running and error messages in syslog
 
 . shell-error
 . shell-var
