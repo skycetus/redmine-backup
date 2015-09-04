@@ -1,6 +1,11 @@
 #! /bin/sh
+
+### This file is covered by the GNU General Public License,
+### which should be included with libshell as the file LICENSE.
+### All copyright information are listed in the COPYING.
+
 #
-# HowTo keywords:
+# HOWTO keywords:
 #   - redmine backup
 #   - svn backup
 #   - git backup
