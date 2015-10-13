@@ -27,12 +27,10 @@
 #     = git
 #     = hg
 #   - host configuration
-#     = apache2
 #     = etckeeper
 #
 # Backup copy stored as tree:
 #   $storage/
-#       apache2/    - backup copy of /etc/apache2
 #       bzr/        - backup copy of bzr repos
 #       etc/        - backup copy of /etc (via etckeeper)
 #       git/        - backup copy of git repos
@@ -50,13 +48,20 @@
 #   message_syslog  - =yes to send messages of running scrip into syslog
 #
 # Partial config opions are:
-#   disable_apache2 - =yes to disable backup apache2
 #   disable_bzr     - =yes to disable backup bzr
 #   disable_etc     - =yes to disable backup etc
 #   disable_git     - =yes to disable backup git
 #   disable_hg      - =yes to disable backup hg
 #   disable_redmine - =yes to disable backup redmine
 #   disable_svn     - =yes to disable backup svn
+#
+# Access control options:
+#   bzr_group
+#   git_group
+#   hg_group
+#   svn_group       - all these options are names of existing unix group, that
+#                     are owners of repos of noted vcs, so members of this group
+#                     win full access to related repos in backup copies.
 #
 # To run this script you need
 #   - have ssh
@@ -79,7 +84,7 @@ denounce()
 	test ! $1 || shell_var_is_no "$1"
 }
 
-# configuration
+# read configuration
 configure()
 {
 	local configure
@@ -128,14 +133,15 @@ create_storage()
 	mkdir -p $1 || fatal can not create $1
 }
 
-# files that can be not saved under /etckeeper
-backup_apache2()
+# set full group access to repo arg1 for group arg2
+communize()
 {
-	local here=$storage
-	local there=/etc/apache2
-	create_storage $here
-	verbose start backup of remote apache2 config
-	rsync -aHS --delete-after ${progress:+"-vP"} $remote:/$there $here
+	if test $2; then
+		chgrp -R $2 $1 &&
+			chmod -R g+rwX $1 &&
+				find $1 -type d -exec chmod g+s {} \; ||
+					fatal setting group access to $1 failed
+	fi
 }
 
 backup_bzr()
@@ -166,6 +172,7 @@ backup_bzr()
 						fatal bzr pull of $here/$repo/$branch failed
 		done
 	done
+	communize $here $bzr_group
 }
 
 # remote etckeeper repository
@@ -198,6 +205,7 @@ backup_git()
 		git --git-dir $here/$repo remote update ||
 			fatal git update failed on $repo
 	done
+	communize $here $git_group
 }
 
 backup_hg()
@@ -213,15 +221,7 @@ backup_hg()
 		hg -R $here/$repo ${quiet:+-q} pull ssh://$remote/$there/$repo ||
 			fatal hg pull failed on $repo
 	done
-}
-
-create_svn_repo()
-{
-	svnadmin create $1 &&
-		chgrp -R subversion $1 &&
-			chmod -R g+rwX $1 &&
-				find $1 -type d -exec chmod g+s {} \; ||
-					fatal creation of $1 failed
+	communize $here $hg_group
 }
 
 # Backing of remote svn repository
@@ -240,19 +240,20 @@ backup_svn()
 		then
 			verbose + svnsync init
 			rm -rf $here/$repo
-			create_svn_repo $here/$repo
+			svnadmin create $here/$repo ||
+				fatal creation of $here/$repo failed
 			printf '#! /bin/sh\nexit\n' > $here/$repo/hooks/pre-revprop-change &&
 				chmod a+rx $here/$repo/hooks/pre-revprop-change
 			svnsync init file://$here/$repo svn+ssh://$remote/$there/$repo &&
 				svnsync sync file://$here/$repo svn+ssh://$remote/$there/$repo > $here/$repo.sync ||
 					fatal svnsync failed
 		fi
-		test -s $here/$repo.sync || continue
 		# If this does not work, then, with LC_MESSAGES=C
 		#grep '^Transmitting file data' $here/$repo.sync ||
 		#	grep '^Committed revision' $here/$repo.sync ||
 		#		grep '^Copied properties for revision' $here/$repo.sync ||
 		#			continue
+		test -s $here/$repo.sync || continue
 		# target #2: slow slow dump...
 		verbose + dump remote svn repository to $here/$repo.dump$packed
 		ssh $remote rm   -rf /var/tmp/svn/$repo > /dev/null
@@ -269,7 +270,8 @@ backup_svn()
 		# target #3: check dump restoring
 		verbose + restore svn repo $repo
 		rm -rf $here/$repo.tmp
-		create_svn_repo $here/$repo.tmp
+		svnadmin create $here/$repo.tmp ||
+			fatal creation of $here/$repo.tmp failed
 		$zcat $zopt $here/$repo.dump$packed | svnadmin load ${quiet:+-q} $here/$repo.tmp ||
 			fatal backup of svn repository $repo lost
 		verbose + rotate backup copies of svn repo $repo
@@ -282,6 +284,7 @@ backup_svn()
 			fatal unknown error on $here/$repo.std
 		verbose + svnsync repo $repo
 	done
+	communize $here $svn_group
 }
 
 # redmine database + files + ???
@@ -339,5 +342,4 @@ backup svn
 backup git
 backup hg
 backup etc
-backup apache2
 backup redmine

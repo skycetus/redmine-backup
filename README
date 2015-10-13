@@ -3,3 +3,5 @@ http://www.turnkeylinux.org/redmine
 
 Keywords: HOWTO BACKUP GIT BZR SVN HG REPOSITORY
 
+This package uses libshell script:
+https://github.com/legionus/libshell.git
