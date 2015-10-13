@@ -1,4 +1,4 @@
-#! /bin/sh
+#! /bin/bash
 
 ### This file is covered by the GNU General Public License,
 ### which should be included with libshell as the file LICENSE.
@@ -245,7 +245,7 @@ backup_svn()
 			printf '#! /bin/sh\nexit\n' > $here/$repo/hooks/pre-revprop-change &&
 				chmod a+rx $here/$repo/hooks/pre-revprop-change
 			svnsync init file://$here/$repo svn+ssh://$remote/$there/$repo &&
-				svnsync sync file://$here/$repo svn+ssh://$remote/$there/$repo > $here/$repo.sync ||
+				svnsync sync file://$here/$repo > $here/$repo.sync ||
 					fatal svnsync failed
 		fi
 		# If this does not work, then, with LC_MESSAGES=C
