@@ -45,7 +45,7 @@
 #   verbose         - =yes to display stages of running script
 #   progress        - =yes to display percentage of copying/packing/unpacking
 #   quiet           - =yes to supress output of version control utilities
-#   message_syslog  - =yes to send messages of running scrip into syslog
+#   message_syslog  - =yes to send messages of running script into syslog
 #
 # Partial config opions are:
 #   disable_bzr     - =yes to disable backup bzr
