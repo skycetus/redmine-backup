@@ -159,7 +159,7 @@ backup_bzr()
 			verbose + branch $repo/$branch
 			for exist in $here_branches; do
 				if [ "$exist" = "$branch" ]; then
-					bzr pull -d $here/$repo/$branch --remember ${quiet:+-q} bzr+ssh://$remote/$there/$repo/$branch ||
+					bzr pull -d $here/$repo/$branch --remember --overwrite ${quiet:+-q} bzr+ssh://$remote/$there/$repo/$branch ||
 						fatal bzr pull of $here/$repo/$branch failed
 					branch=..
 					break
